@@ -14,6 +14,16 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
+import {
+  extractLinks,
+  stripLinks,
+  resolveGroundingUrls,
+  handleMessage as routeMessage,
+  buildRequest,
+  buildSearchPrompt,
+  formatResult,
+  type PendingRequest,
+} from "./lib.js";
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
@@ -29,13 +39,6 @@ let sessionId: string | null = null;
 let requestId = 0;
 let queryCount = 0;
 let processStartTime: number | null = null;
-
-interface PendingRequest {
-  resolve: (value: any) => void;
-  reject: (reason: any) => void;
-  onNotification?: (notification: any) => void;
-  timeout: NodeJS.Timeout;
-}
 
 const pending = new Map<number, PendingRequest>();
 
@@ -60,7 +63,7 @@ function sendRequest(
 
     pending.set(id, { resolve, reject, onNotification, timeout });
 
-    const line = JSON.stringify({ jsonrpc: "2.0", method, id, params }) + "\n";
+    const line = buildRequest(id, method, params);
     acpProcess.stdin.write(line, (err) => {
       if (err) {
         clearTimeout(timeout);
@@ -69,24 +72,6 @@ function sendRequest(
       }
     });
   });
-}
-
-function handleMessage(msg: any): void {
-  if (msg?.jsonrpc !== "2.0") return;
-
-  // Notification (no id) — broadcast to listeners
-  if (msg.method === "session/update" && !msg.id) {
-    if (msg.params?.update?.sessionUpdate === "available_commands_update") return;
-    for (const p of pending.values()) p.onNotification?.(msg);
-    return;
-  }
-
-  // Response
-  const p = pending.get(msg.id);
-  if (!p) return;
-  clearTimeout(p.timeout);
-  pending.delete(msg.id);
-  msg.error ? p.reject(new Error(`ACP error: ${msg.error.message}`)) : p.resolve(msg.result);
 }
 
 // ── Process lifecycle ────────────────────────────────────────────────────────
@@ -125,7 +110,7 @@ async function ensureProcess(): Promise<void> {
     const rl = createInterface({ input: acpProcess.stdout!, crlfDelay: Infinity });
     rl.on("line", (line) => {
       try {
-        handleMessage(JSON.parse(line));
+        routeMessage(JSON.parse(line), pending);
       } catch {}
     });
 
@@ -192,71 +177,6 @@ async function ensureProcess(): Promise<void> {
   });
 }
 
-// ── Link extraction & URL resolution ─────────────────────────────────────────
-
-function extractLinks(text: string): Array<{ title: string; url: string }> {
-  const links: Array<{ title: string; url: string }> = [];
-  const seen = new Set<string>();
-
-  // Markdown links: [text](url)
-  for (const m of text.matchAll(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g)) {
-    if (!seen.has(m[2])) {
-      seen.add(m[2]);
-      links.push({ title: m[1], url: m[2] });
-    }
-  }
-
-  // Reference-style: [N] title (url)
-  for (const m of text.matchAll(/\[\d+\]\s*([^\n(]+?)[\s\n]*\((https?:\/\/[^)]+)\)/g)) {
-    if (!seen.has(m[2])) {
-      seen.add(m[2]);
-      links.push({ title: m[1].trim(), url: m[2] });
-    }
-  }
-
-  // Bare URLs
-  for (const m of text.matchAll(/(?:^|\s)(https?:\/\/[^\s)]+)/gm)) {
-    if (!seen.has(m[1])) {
-      seen.add(m[1]);
-      try {
-        links.push({ title: new URL(m[1]).hostname.replace(/^www\./, ""), url: m[1] });
-      } catch {
-        links.push({ title: m[1], url: m[1] });
-      }
-    }
-  }
-
-  return links;
-}
-
-function stripLinks(text: string): string {
-  let cleaned = text.replace(/\[([^\]]+)\]\(https?:\/\/[^)]+\)/g, "$1");
-  cleaned = cleaned.replace(/\(https?:\/\/[^)]+\)/g, "");
-  cleaned = cleaned.replace(/^\s*https?:\/\/[^\s]+\s*$/gm, "");
-  cleaned = cleaned.replace(/\n*(?:Sources|References):\s*[\s\S]*$/i, "");
-  return cleaned.trimEnd();
-}
-
-async function resolveGroundingUrls(
-  links: Array<{ title: string; url: string }>
-): Promise<Array<{ title: string; url: string; resolved: boolean }>> {
-  return Promise.all(
-    links.map(async ({ title, url }) => {
-      if (!url.includes("vertexaisearch.cloud.google.com/grounding-api-redirect/")) {
-        return { title, url, resolved: true };
-      }
-      try {
-        const res = await fetch(url, { method: "HEAD", redirect: "manual" });
-        const location = res.headers.get("Location");
-        if (location && [301, 302, 307, 308].includes(res.status)) {
-          return { title, url: location, resolved: true };
-        }
-      } catch {}
-      return { title, url, resolved: false };
-    })
-  );
-}
-
 // ── Search execution ─────────────────────────────────────────────────────────
 
 async function search(
@@ -287,7 +207,7 @@ async function search(
       "session/prompt",
       {
         sessionId: sessionId!,
-        prompt: [{ type: "text", text: `Use the google_web_search tool to search the web for: ${query}. Include source URLs.` }],
+        prompt: [{ type: "text", text: buildSearchPrompt(query) }],
       },
       (notification: any) => {
         const update = notification.params?.update;
@@ -350,19 +270,8 @@ export default function (pi: ExtensionAPI) {
 
       const result = await search(params.query, signal, onUpdate);
 
-      const lines: string[] = [result.answer];
-
-      if (result.warning) {
-        lines.push("", `⚠️ ${result.warning}`);
-      }
-
-      if (result.sources.length > 0) {
-        lines.push("", "**Sources:**");
-        result.sources.forEach((s, i) => lines.push(`${i + 1}. [${s.title}](${s.url})`));
-      }
-
       return {
-        content: [{ type: "text", text: lines.join("\n") }],
+        content: [{ type: "text", text: formatResult(result) }],
         details: {
           query: params.query,
           sources: result.sources,

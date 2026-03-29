@@ -1,0 +1,14 @@
+{
+  "name": "pi-gemini-search",
+  "version": "1.0.0",
+  "description": "Pi extension for web search via Gemini CLI's ACP protocol",
+  "type": "module",
+  "scripts": {
+    "test": "node --import tsx --test lib.test.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "@types/node": "^22.0.0"
+  },
+  "license": "MIT"
+}
