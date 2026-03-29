@@ -170,7 +170,7 @@ describe("resolveGroundingUrls", () => {
     );
 
     assert.equal(fetchFn.mock.callCount(), 1);
-    const call = fetchFn.mock.calls[0];
+    const call = fetchFn.mock.calls[0] as any;
     assert.equal(call.arguments[0], groundingUrl);
     assert.deepEqual(call.arguments[1], { method: "HEAD", redirect: "manual" });
     assert.deepEqual(result, [{ title: "Source", url: "https://real-site.com/page", resolved: true }]);

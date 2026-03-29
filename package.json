@@ -4,10 +4,13 @@
   "description": "Pi extension for web search via Gemini CLI's ACP protocol",
   "type": "module",
   "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test lib.test.ts"
   },
   "devDependencies": {
     "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
     "@types/node": "^22.0.0"
   },
   "license": "MIT"

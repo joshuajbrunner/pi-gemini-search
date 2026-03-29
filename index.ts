@@ -10,7 +10,9 @@
  *   gemini          # run once to complete OAuth
  */
 
+// @ts-ignore — resolved by pi runtime
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+// @ts-ignore — resolved by pi runtime
 import { Type } from "@sinclair/typebox";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
@@ -265,7 +267,7 @@ export default function (pi: ExtensionAPI) {
       query: Type.String({ description: "Search query" }),
     }),
 
-    async execute(_toolCallId, params, signal, onUpdate, _ctx) {
+    async execute(_toolCallId: string, params: any, signal: any, onUpdate: any, _ctx: any) {
       onUpdate?.({ content: [{ type: "text", text: `Searching: ${params.query}` }] });
 
       const result = await search(params.query, signal, onUpdate);
