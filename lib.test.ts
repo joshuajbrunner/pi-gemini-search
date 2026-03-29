@@ -9,7 +9,7 @@ import {
   buildSearchPrompt,
   formatResult,
   type PendingRequest,
-} from "./lib.js";
+} from "./index.js";
 
 // ═════════════════════════════════════════════════════════════════════════════
 // extractLinks
